@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Smoke Infiltration Demo</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+    }
+    header {
+      padding: 12px 20px;
+      background: #222;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 {
+      font-size: 18px;
+      margin: 0;
+    }
+    header .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .container {
+      padding: 16px 20px 40px 20px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      flex: 1 1 400px;
+      min-width: 350px;
+    }
+    .card h2 {
+      font-size: 14px;
+      margin: 0 0 6px 0;
+    }
+    .plot {
+      width: 100%;
+      height: 320px;
+    }
+    select, label {
+      font-size: 13px;
+    }
+    #status {
+      font-size: 12px;
+      color: #555;
+      padding: 4px 20px 0 20px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Smoke Infiltration Analysis Demo</h1>
+    <div class="controls">
+      <label for="eventSelect">Event:&nbsp;</label>
+      <select id="eventSelect"></select>
+      <label>
+        <input type="checkbox" id="filterOutliers" checked />
+        Remove IR &gt; 1.5
+      </label>
+    </div>
+  </header>
+
+  <div id="status">Loading data...</div>
+
+  <div class="container">
+    <div class="row">
+      <div class="card">
+        <h2>Sensor Location (approximate)</h2>
+        <div id="map" class="plot"></div>
+      </div>
+      <div class="card">
+        <h2>IR Over Time</h2>
+        <div id="irTime" class="plot"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <h2>IR vs Temperature</h2>
+        <div id="irTemp" class="plot"></div>
+      </div>
+      <div class="card">
+        <h2>IR vs Wind Speed</h2>
+        <div id="irWind" class="plot"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <h2>IR Distribution</h2>
+        <div id="irHist" class="plot"></div>
+      </div>
+      <div class="card">
+        <h2>Smoke vs Non-Smoke Hours (IR)</h2>
+        <div id="smokeBox" class="plot"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const eventLocations = {
+      "2025_nyc_canadian_smoke": { lat: 40.7128, lon: -74.0060, name: "New York City" },
+      "2023_nyc_canadian_smoke": { lat: 40.7128, lon: -74.0060, name: "New York City" },
+      "2020_portland_megafire":  { lat: 45.5051, lon: -122.6750, name: "Portland" },
+      "2020_houston_godzilla_dust": { lat: 29.7604, lon: -95.3698, name: "Houston" },
+      "2018_sf_camp_fire":       { lat: 37.7749, lon: -122.4194, name: "San Francisco" }
+    };
+
+    let allData = [];
+    let events = [];
+
+    const eventSelect = document.getElementById("eventSelect");
+    const filterOutliersCheckbox = document.getElementById("filterOutliers");
+    const statusEl = document.getElementById("status");
+
+    function parseCsv(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length === 0) return [];
+
+  const headers = lines[0].split(",").map(h => h.trim());
+
+  const rows = lines.slice(1).map(line => {
+    if (!line.trim()) return null;
+    const cols = line.split(",");
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = parseCsvValue(cols[i]);
+    });
+    return obj;
+  });
+
+  return rows.filter(r => r !== null);
+}
+
+function parseCsvValue(value) {
+  if (value === undefined) return null;
+  const v = value.trim();
+  if (v === "") return null;
+  const num = Number(v);
+  if (!Number.isNaN(num)) return num;
+  return v;
+}
+
+function loadData() {
+    statusEl.textContent = "Loading data...";
+
+    fetch("hourly_all_events.csv")
+        .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} when loading CSV`);
+        }
+        return response.text();
+        })
+        .then(text => {
+        allData = parseCsv(text);
+
+        allData = allData.filter(row =>
+            row &&
+            row.IR !== null && row.IR !== undefined &&
+            row.time_hour && row.event_id
+        );
+
+        events = Array.from(new Set(allData.map(d => d.event_id))).sort();
+
+        eventSelect.innerHTML = "";
+        events.forEach(ev => {
+            const opt = document.createElement("option");
+            opt.value = ev;
+            opt.textContent = ev;
+            eventSelect.appendChild(opt);
+        });
+
+        statusEl.textContent = `Loaded ${allData.length} rows across ${events.length} events.`;
+
+        updateAllPlots();
+        })
+        .catch(err => {
+        console.error("Error loading CSV:", err);
+        statusEl.textContent = "Error loading hourly_all_events.csv (check console).";
+        });
+    }
+
+    eventSelect.addEventListener("change", updateAllPlots);
+    filterOutliersCheckbox.addEventListener("change", updateAllPlots);
+
+    loadData();
+
+
+    function getFilteredData() {
+      const eventId = eventSelect.value || events[0];
+      const removeOutliers = filterOutliersCheckbox.checked;
+
+      let data = allData.filter(d => d.event_id === eventId);
+
+      if (removeOutliers) {
+        data = data.filter(d => typeof d.IR === "number" && d.IR <= 1.5);
+      }
+
+      data.forEach(d => {
+        d._time = new Date(d.time_hour);
+      });
+
+      data.sort((a, b) => a._time - b._time);
+      return { eventId, data };
+    }
+
+    function updateAllPlots() {
+      const { eventId, data } = getFilteredData();
+
+      if (!data || data.length === 0) {
+        statusEl.textContent = `No data available for ${eventId} (after filters).`;
+      } else {
+        statusEl.textContent = `Showing ${data.length} hourly records for ${eventId}.`;
+      }
+
+      updateMap(eventId, data);
+      updateIrTime(eventId, data);
+      updateIrTemp(eventId, data);
+      updateIrWind(eventId, data);
+      updateIrHist(eventId, data);
+      updateSmokeBox(eventId, data);
+    }
+
+    // 1) Map sensor location
+    function updateMap(eventId, data) {
+      const loc = eventLocations[eventId];
+
+      if (!loc) {
+        const traceText = {
+          type: "scattergeo",
+          lon: [-95],
+          lat: [40],
+          mode: "text",
+          text: ["No location configured for this event."],
+          textfont: { size: 14, color: "red" }
+        };
+        const layout = {
+          geo: { scope: "usa", projection: { type: "albers usa" } },
+          margin: { t: 30, r: 10, b: 10, l: 10 },
+          title: { text: `HMS Smoke Polygon & Sensor Location – ${eventId}`, font: { size: 14 } }
+        };
+        Plotly.newPlot("map", [traceText], layout, { responsive: true });
+        return;
+      }
+
+      const radius = 3.0; 
+      const lons = [
+        loc.lon - radius, loc.lon + radius, loc.lon + radius, loc.lon - radius, loc.lon - radius
+      ];
+      const lats = [
+        loc.lat - radius, loc.lat - radius, loc.lat + radius, loc.lat + radius, loc.lat - radius
+      ];
+
+      const sensorTrace = {
+        type: "scattergeo",
+        lon: [loc.lon],
+        lat: [loc.lat],
+        mode: "markers+text",
+        marker: { color: "red", size: 8 },
+        text: [loc.name || "Sensor"],
+        textposition: "top center",
+        name: "PurpleAir sensor (approx)"
+      };
+
+      const layout = {
+        geo: {
+          scope: "usa",
+          projection: { type: "albers usa" },
+          showland: true,
+          landcolor: "#f0f0f0",
+          coastlinecolor: "#999",
+        },
+        margin: { t: 40, r: 10, b: 10, l: 10 },
+        title: { text: `Sensor Location – ${eventId}`, font: { size: 14 } }
+      };
+
+      Plotly.newPlot("map", [sensorTrace], layout, { responsive: true });
+    }
+
+
+    // 2) IR over time
+    function updateIrTime(eventId, data) {
+      const trace = {
+        x: data.map(d => d._time),
+        y: data.map(d => d.IR),
+        mode: "lines+markers",
+        marker: { size: 4 },
+        line: { width: 1.5 },
+        name: "IR"
+      };
+
+      const layout = {
+        margin: { t: 30, r: 10, b: 40, l: 50 },
+        title: { text: `IR Over Time – ${eventId}`, font: { size: 14 } },
+        xaxis: { title: "Time" },
+        yaxis: { title: "IR", rangemode: "tozero" }
+      };
+
+      Plotly.newPlot("irTime", [trace], layout, { responsive: true });
+    }
+
+
+    // 3) IR vs Temperature
+    function updateIrTemp(eventId, data) {
+      const filtered = data.filter(d => d.temp_c !== null && d.temp_c !== undefined);
+      const trace = {
+        x: filtered.map(d => d.temp_c),
+        y: filtered.map(d => d.IR),
+        mode: "markers",
+        marker: { size: 6, opacity: 0.7 },
+        name: "IR vs Temp"
+      };
+
+      const layout = {
+        margin: { t: 30, r: 10, b: 40, l: 50 },
+        title: { text: `IR vs Temperature – ${eventId}`, font: { size: 14 } },
+        xaxis: { title: "Temperature (°C)" },
+        yaxis: { title: "IR", rangemode: "tozero" }
+      };
+
+      Plotly.newPlot("irTemp", [trace], layout, { responsive: true });
+    }
+
+
+    // 4) IR vs Wind Speed
+    function updateIrWind(eventId, data) {
+      const filtered = data.filter(d => d.wind_mps !== null && d.wind_mps !== undefined);
+      const trace = {
+        x: filtered.map(d => d.wind_mps),
+        y: filtered.map(d => d.IR),
+        mode: "markers",
+        marker: { size: 6, opacity: 0.7 },
+        name: "IR vs Wind"
+      };
+
+      const layout = {
+        margin: { t: 30, r: 10, b: 40, l: 50 },
+        title: { text: `IR vs Wind Speed – ${eventId}`, font: { size: 14 } },
+        xaxis: { title: "Wind Speed (m/s)" },
+        yaxis: { title: "IR", rangemode: "tozero" }
+      };
+
+      Plotly.newPlot("irWind", [trace], layout, { responsive: true });
+    }
+
+
+    // 5) IR Distribution
+    function updateIrHist(eventId, data) {
+      const trace = {
+        x: data.map(d => d.IR),
+        type: "histogram",
+        nbinsx: 30,
+        opacity: 0.75,
+        name: "IR"
+      };
+
+      const layout = {
+        margin: { t: 30, r: 10, b: 40, l: 50 },
+        title: { text: `IR Distribution – ${eventId}`, font: { size: 14 } },
+        xaxis: { title: "IR" },
+        yaxis: { title: "Count" }
+      };
+
+      Plotly.newPlot("irHist", [trace], layout, { responsive: true });
+    }
+
+
+    // 6) Smoke vs Non-Smoke Hours 
+    function updateSmokeBox(eventId, data) {
+      const smoke = data.filter(d => d.smoke_flag === 1).map(d => d.IR);
+      const clean = data.filter(d => d.smoke_flag === 0).map(d => d.IR);
+
+      const traces = [];
+
+      if (clean.length > 0) {
+        traces.push({
+          y: clean,
+          type: "box",
+          name: "Non-smoke (flag = 0)",
+          boxpoints: "outliers"
+        });
+      }
+
+      if (smoke.length > 0) {
+        traces.push({
+          y: smoke,
+          type: "box",
+          name: "Smoke (flag = 1)",
+          boxpoints: "outliers"
+        });
+      }
+
+      const layout = {
+        margin: { t: 30, r: 10, b: 40, l: 50 },
+        title: { text: `Smoke vs Non-Smoke IR – ${eventId}`, font: { size: 14 } },
+        yaxis: { title: "IR", rangemode: "tozero" }
+      };
+
+      Plotly.newPlot("smokeBox", traces, layout, { responsive: true });
+    }
+  </script>
+</body>
+</html>
