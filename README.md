@@ -1,1 +1,7 @@
 # smoke-infiltration-analysis
+
+Smoke-driven pollution events have become a increasingly persistent and severe public health risk over the last few decades. Compared to outdoor air quality which is widely monitored, human exposure is primarily based on indoor environments. Indoor smoke exposure depends on many factors such as building characteristics, meteorological drivers, and event-specific smoke dynamics which makes it difficult to accurately gauge impact of such smoke events on public-health. We present an event-driven data pipeline that integrates PurpleAir sensor readings, NOAA Hazard Mapping System (HMS) polygons, and hourly meteorological drivers from the Integrated Surface Database (ISD) to create one unified dataset containing multi-year, multi-event hourly data spanning 2018-2025. We introduce the infiltration ratio(IR), defined as the ratio between indoor to outdoor PM$_{2.5}$ concentration as a normalized metric for cross-event comparison. Using exploratory and statistical analysis, we examine the dependence of IRs on meteorological drivers. An interactive visualization framework is further implemented to support interpretability of the data. This work establishes a scalable basis for predictive modeling of indoor smoke exposure.
+
+The notebook can be run with 'run all' with a valid PurpleAir API key.
+
+DEMO is available at: https://sapphirine.github.io/smoke-infiltration-analysis/analysis.html
